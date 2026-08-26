@@ -30,7 +30,7 @@ const REC_MODELS = {
 const DICT_URL =
   "https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@main/ppocr/utils/dict/ppocrv5_dict.txt";
 
-const MODEL_CACHE = "bookocr-models-v5-exp";
+const MODEL_CACHE = "bookocr-models-v5-1";
 const MAX_PAGE_SIDE = 2400;
 
 ort.env.wasm.numThreads = 1;
@@ -630,10 +630,11 @@ function splitPixelsForBook() {
   const splitPct = Number($("splitRange").value) / 100;
   const gutterPct = Number($("gutterRange").value) / 100;
   const splitX = Math.round(w * splitPct);
-  const halfGutter = Math.round((w * gutterPct) / 2);
 
-  const leftEnd = Math.max(1, splitX - halfGutter);
-  const rightStart = Math.min(w - 1, splitX + halfGutter);
+  // Horizontal spread mode uses the same spine-overlap rule.
+  const halfOverlap = Math.round((w * gutterPct) / 2);
+  const leftEnd = Math.min(w, Math.max(1, splitX + halfOverlap));
+  const rightStart = Math.max(0, Math.min(w - 1, splitX - halfOverlap));
 
   function cropPixels(src, x0, y0, cw, ch) {
     const channels =
@@ -936,9 +937,12 @@ function splitPages() {
   const splitPct = Number($("splitRange").value) / 100;
   const gutterPct = Number($("gutterRange").value) / 100;
   const splitX = w * splitPct;
-  const halfGutter = (w * gutterPct) / 2;
-  const leftEnd = Math.max(1, splitX - halfGutter);
-  const rightStart = Math.min(w - 1, splitX + halfGutter);
+
+  // Keep an overlapping band around the spine.
+  // This avoids deleting characters near the binding before UVDoc runs.
+  const halfOverlap = (w * gutterPct) / 2;
+  const leftEnd = Math.min(w, Math.max(1, splitX + halfOverlap));
+  const rightStart = Math.max(0, Math.min(w - 1, splitX - halfOverlap));
 
   const rc = document.createElement("canvas");
   const lc = document.createElement("canvas");
@@ -975,7 +979,7 @@ function splitPages() {
   $("copyTextBtn").disabled = true;
   $("downloadTextBtn").disabled = true;
 
-  setStatus("左右頁切割完成。", "下一步可跑 UVDoc。", 0);
+  setStatus("左右頁切割完成。", "中央書脊採重疊保留，不會先刪掉靠裝訂處的文字。", 0);
 }
 
 async function runUvDoc() {

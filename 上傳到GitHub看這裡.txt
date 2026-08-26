@@ -1,17 +1,17 @@
-BookOCR v5 Experimental Auto
+BookOCR v5.1 Experimental
 
-重要：
-v4.5 請保留，它是穩定直書版。
-v5 是新實驗版，不是把 v4.5 蓋掉的唯一備份。
+修正：靠書脊文字被切掉。
 
-建議另外建立一個測試 repo，或至少保留 v4.5 ZIP。
+原本「忽略中央書脊」會真的刪掉中央影像。
+現在改成「書脊重疊保留 3%」：
+左右頁都保留中央一小段。
 
-v5 新增：
-- Auto Layout Router
-- 傳統直書
-- 直排單頁
-- 橫排書籍 / 文件
-- 一般圖片 / 招牌
-- 修正直書視覺順序：右頁在右、Column 01 在最右
+更新：
+Code -> Add file -> Upload files
+-> 覆蓋新版
+-> Commit
+-> Actions 綠色
+-> Ctrl+F5
 
-不用碰 YML。
+新版標題：
+BookOCR · 自動版面 OCR v5.1 Experimental

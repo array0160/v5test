@@ -1,74 +1,33 @@
-# BookOCR Web v5 Experimental — Auto Layout Router
+# BookOCR Web v5.1 Experimental — Spine Overlap Fix
 
-**v4.5 保留為穩定直書版。**
-v5 是另外一條 Experimental 分支，不取代 v4.5。
+v4.5 仍然是穩定直書備份。
+v5.1 是 v5 Auto 實驗版的書脊裁切修正。
 
-## v5 的目標
+## 問題
 
-一般使用者不用理解 OCR 類型。
+舊版「忽略中央書脊」會真的刪掉中央一條影像。
 
-首頁預設：
+如果正文靠近裝訂處，文字在送進 UVDoc 前就已經不見了。
 
-`Auto（推薦：直接亂丟）`
+## v5.1
 
-先跑 PP-OCRv5 detector，看文字區塊的形狀：
+改成：
 
-- 多數高瘦 + 圖片像跨頁 → 傳統直書
-- 多數高瘦 + 單頁 → 直排單頁
-- 多數寬扁 → 橫排書籍 / 文件
-- 方向混合 → 一般圖片 / 招牌 / 海報
+`書脊重疊保留 3.0%`
 
-使用者仍然可以手動覆蓋：
+也就是：
 
-- 傳統直書
-- 橫排書籍 / 文件
-- 一般圖片 / 招牌 / 海報
+- 左頁多保留一點書脊右側
+- 右頁多保留一點書脊左側
+- 中央一小段同時存在於兩頁
 
-## 傳統直書
+寧可之後有少量重複，也不要永久切字。
 
-完整保留 v4.5：
+建議值：
+- 一般：2%～5%
+- 很難攤平、文字貼裝訂：5%～7%
+- 吃到太多另一頁：降到 1%～2%
 
-UVDoc → Detector → PCA → V3 → A/B Recognition
+橫排跨頁模式也使用相同的 overlap 邏輯。
 
-並修正畫面閱讀方向：
-
-- 右頁真的顯示在右邊
-- 左頁顯示在左邊
-- Column 01 真的在最右邊
-- 全文仍是右頁 → 左頁、右欄 → 左欄
-
-## 橫排書籍 / 文件
-
-- 如果像跨頁：左頁 → 右頁
-- 每頁 UVDoc
-- Detector 找文字區塊
-- 上 → 下
-- 同一行左 → 右
-- Recognition
-
-## 直排單頁
-
-不硬切左右頁。
-
-Detector 找高瘦文字區塊，
-依右 → 左排序，
-RecognitionService 對高瘦 crop 自動旋正後辨識。
-
-## 一般圖片 / 招牌
-
-不跑書頁 V3。
-
-原圖 → Detector → 區塊排序 → Recognition
-
-這是第一版 router，之後可再針對：
-- 斜招牌
-- 多欄現代文件
-- 表格
-- 多語言
-做更細的 layout 判斷。
-
-## GitHub
-
-你現有 workflow 不用改。
-
-Code → Add file → Upload files → 覆蓋新版 → Commit → Actions 綠色 → Ctrl+F5
+GitHub workflow 不用改。

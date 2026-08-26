@@ -10,8 +10,8 @@
 <main id="app">
   <header class="hero">
     <div>
-      <div class="eyebrow">Browser-only · v5 Experimental · Auto Layout Router</div>
-      <h1>BookOCR · 自動版面 OCR v5 Experimental</h1>
+      <div class="eyebrow">Browser-only · v5.1 Experimental · Spine Overlap Fix</div>
+      <h1>BookOCR · 自動版面 OCR v5.1 Experimental</h1>
       <p>
         預設直接丟圖片即可。Auto 會先看文字框方向，再分流到：
         傳統直書、橫排書籍/文件、直排單頁或一般圖片 OCR。v4.5 直書流程完整保留。
@@ -47,8 +47,9 @@
       <input id="splitRange" type="range" min="38" max="62" value="50" step="0.5" />
     </div>
     <div class="control book-only-control">
-      <label>忽略中央書脊 <b id="gutterValue">1.5%</b></label>
-      <input id="gutterRange" type="range" min="0" max="8" value="1.5" step="0.5" />
+      <label>書脊重疊保留 <b id="gutterValue">3.0%</b></label>
+      <input id="gutterRange" type="range" min="0" max="10" value="3.0" step="0.5" />
+      <small>左右頁會共享這段書脊區域，不再把中央文字直接刪掉。</small>
     </div>
     <div class="control info-control">
       <span>目前閱讀順序</span>
