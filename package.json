@@ -1,7 +1,7 @@
 {
-  "name": "bookocr-web-v5-1-spine-overlap",
+  "name": "bookocr-web-v5-3-manual-cleanup",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.3",
   "type": "module",
   "scripts": {
     "dev": "vite",

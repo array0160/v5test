@@ -30,7 +30,7 @@ const REC_MODELS = {
 const DICT_URL =
   "https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@main/ppocr/utils/dict/ppocrv5_dict.txt";
 
-const MODEL_CACHE = "bookocr-models-v5-1";
+const MODEL_CACHE = "bookocr-models-v5-3";
 const MAX_PAGE_SIDE = 2400;
 
 ort.env.wasm.numThreads = 1;
@@ -71,6 +71,14 @@ const state = {
   routerAnalysis: null,
   generalPages: [],
   generalRecognition: [],
+  excludedColumns: {
+    right: new Set(),
+    left: new Set(),
+  },
+  overlayHitboxes: {
+    right: [],
+    left: [],
+  },
 };
 
 let webGpuProbePromise = null;
@@ -672,9 +680,17 @@ function splitPixelsForBook() {
     return { width: cw, height: ch, data };
   }
 
+  const pagePadPercent = Number($("pagePadRange").value);
+
   return {
-    left: cropPixels(image, 0, 0, leftEnd, h),
-    right: cropPixels(image, rightStart, 0, w - rightStart, h),
+    left: addWhitePadding(
+      cropPixels(image, 0, 0, leftEnd, h),
+      pagePadPercent,
+    ),
+    right: addWhitePadding(
+      cropPixels(image, rightStart, 0, w - rightStart, h),
+      pagePadPercent,
+    ),
   };
 }
 
@@ -839,6 +855,14 @@ function renderGeneralRecognition(items) {
     row.appendChild(name);
     row.appendChild(text);
     row.appendChild(confidence);
+
+    if (item.columnId) {
+      const del = document.createElement("button");
+      del.className = "rec-delete";
+      del.textContent = "× 刪除此欄";
+      del.addEventListener("click", () => removeColumn(side, item.columnId));
+      row.appendChild(del);
+    }
     root.appendChild(row);
   });
 
@@ -870,7 +894,11 @@ async function runGeneralPipeline(mode) {
     // A single photographed horizontal page can also benefit from UVDoc.
     const uv = await ensureUvDoc();
     setStatus("橫排單頁：UVDoc 展平…", "", 30);
-    const flat = (await uv.run(state.fullInput)).doctrImage;
+    const padded = addWhitePadding(
+      state.fullInput,
+      Number($("pagePadRange").value),
+    );
+    const flat = (await uv.run(padded)).doctrImage;
     pages = [{ name: "單頁", image: flat }];
   } else {
     pages = [{ name: mode === "vertical-single" ? "直排單頁" : "一般圖片", image: state.fullInput }];
@@ -929,6 +957,57 @@ async function runGeneralPipeline(mode) {
   );
 }
 
+
+function addWhitePadding(image, percent) {
+  const p = Math.max(0, Number(percent) || 0) / 100;
+  if (p <= 0) return image;
+
+  const padX = Math.round(image.width * p);
+  const padY = Math.round(image.height * p);
+  const outW = image.width + padX * 2;
+  const outH = image.height + padY * 2;
+  const out = new Uint8Array(outW * outH * 4);
+
+  for (let i = 0; i < out.length; i += 4) {
+    out[i] = 246;
+    out[i + 1] = 245;
+    out[i + 2] = 239;
+    out[i + 3] = 255;
+  }
+
+  const channels =
+    image.data.length === image.width * image.height * 4 ? 4 :
+    image.data.length === image.width * image.height * 3 ? 3 : 1;
+
+  for (let y = 0; y < image.height; y++) {
+    for (let x = 0; x < image.width; x++) {
+      const dst = ((y + padY) * outW + (x + padX)) * 4;
+
+      if (channels === 4) {
+        const src = (y * image.width + x) * 4;
+        out[dst] = image.data[src];
+        out[dst + 1] = image.data[src + 1];
+        out[dst + 2] = image.data[src + 2];
+        out[dst + 3] = image.data[src + 3];
+      } else if (channels === 3) {
+        const src = (y * image.width + x) * 3;
+        out[dst] = image.data[src];
+        out[dst + 1] = image.data[src + 1];
+        out[dst + 2] = image.data[src + 2];
+        out[dst + 3] = 255;
+      } else {
+        const v = image.data[y * image.width + x];
+        out[dst] = v;
+        out[dst + 1] = v;
+        out[dst + 2] = v;
+        out[dst + 3] = 255;
+      }
+    }
+  }
+
+  return { width: outW, height: outH, data: out };
+}
+
 function splitPages() {
   if (!state.bitmap) return;
 
@@ -950,14 +1029,20 @@ function splitPages() {
   drawBitmapCropToCanvas(state.bitmap, rightStart, 0, w - rightStart, h, rc);
   drawBitmapCropToCanvas(state.bitmap, 0, 0, leftEnd, h, lc);
 
-  state.rightInput = canvasToPixels(rc);
-  state.leftInput = canvasToPixels(lc);
+  const pagePadPercent = Number($("pagePadRange").value);
+  state.rightInput = addWhitePadding(canvasToPixels(rc), pagePadPercent);
+  state.leftInput = addWhitePadding(canvasToPixels(lc), pagePadPercent);
   state.rightFlat = null;
   state.leftFlat = null;
   state.rightDetection = null;
   state.leftDetection = null;
   state.rightStrips = [];
   state.leftStrips = [];
+  state.excludedColumns.right = new Set();
+  state.excludedColumns.left = new Set();
+  state.overlayHitboxes.right = [];
+  state.overlayHitboxes.left = [];
+  $("restoreColumnsBtn").disabled = true;
   state.rightRecognition = [];
   state.leftRecognition = [];
 
@@ -1137,10 +1222,15 @@ function makeColumns(boxes, imageHeight) {
 
   // Traditional vertical reading order: right to left.
   cols.sort((a, b) => b.xRef - a.xRef);
+
+  cols.forEach((c, index) => {
+    c._columnId = `col-${index + 1}`;
+  });
+
   return cols;
 }
 
-function drawOverlay(image, boxes, cols, canvas) {
+function drawOverlay(image, boxes, cols, canvas, side = null) {
   pixelsToCanvas(image, canvas);
   const ctx = canvas.getContext("2d");
 
@@ -1148,8 +1238,8 @@ function drawOverlay(image, boxes, cols, canvas) {
   ctx.lineCap = "round";
 
   // Detector polygons: red.
-  ctx.strokeStyle = "rgba(220, 55, 65, .82)";
-  ctx.lineWidth = Math.max(1.5, canvas.width / 650);
+  ctx.strokeStyle = "rgba(220, 55, 65, .72)";
+  ctx.lineWidth = Math.max(1.4, canvas.width / 700);
 
   for (const box of boxes) {
     const pts = boxPoints(box);
@@ -1165,7 +1255,11 @@ function drawOverlay(image, boxes, cols, canvas) {
   ctx.strokeStyle = "rgba(25, 105, 215, .95)";
   ctx.fillStyle = "rgba(25, 105, 215, .95)";
   ctx.lineWidth = Math.max(2.2, canvas.width / 430);
-  ctx.font = `bold ${Math.max(15, canvas.width / 42)}px system-ui`;
+
+  const fontSize = Math.max(15, canvas.width / 42);
+  ctx.font = `bold ${fontSize}px system-ui`;
+
+  const hitboxes = [];
 
   cols.forEach((c, i) => {
     const y0 = Math.max(0, c.y0);
@@ -1178,12 +1272,38 @@ function drawOverlay(image, boxes, cols, canvas) {
     ctx.lineTo(x1, y1);
     ctx.stroke();
 
-    const labelX = Math.max(4, Math.min(canvas.width - 50, x0 + 5));
-    const labelY = Math.max(20, y0 + 18);
-    ctx.fillText(String(i + 1), labelX, labelY);
-  });
-}
+    const labelX = Math.max(4, Math.min(canvas.width - 65, x0 + 4));
+    const labelY = Math.max(22, y0 + 20);
 
+    // Delete badge.
+    const badgeSize = Math.max(17, fontSize * 0.95);
+    const bx = Math.max(2, labelX - badgeSize - 3);
+    const by = Math.max(2, labelY - badgeSize + 2);
+
+    ctx.fillStyle = "rgba(190, 42, 50, .92)";
+    ctx.fillRect(bx, by, badgeSize, badgeSize);
+    ctx.fillStyle = "white";
+    ctx.font = `bold ${Math.max(13, badgeSize * 0.78)}px system-ui`;
+    ctx.fillText("×", bx + badgeSize * 0.17, by + badgeSize * 0.82);
+
+    ctx.fillStyle = "rgba(25, 105, 215, .95)";
+    ctx.font = `bold ${fontSize}px system-ui`;
+    ctx.fillText(String(i + 1), labelX, labelY);
+
+    hitboxes.push({
+      x: bx - 4,
+      y: by - 4,
+      width: badgeSize + 8,
+      height: badgeSize + 8,
+      columnId: c._columnId,
+    });
+  });
+
+  if (side) {
+    state.overlayHitboxes[side] = hitboxes;
+    canvas.classList.add("clickable-overlay");
+  }
+}
 async function detectPage(image, side) {
   const detector = await ensureDetector();
   const options = detectorRuntimeOptions();
@@ -1214,7 +1334,7 @@ async function detectPage(image, side) {
 
   const cols = makeColumns(boxes, image.height);
   const canvas = $(side === "right" ? "rightOverlay" : "leftOverlay");
-  drawOverlay(image, boxes, cols, canvas);
+  drawOverlay(image, boxes, cols, canvas, side);
 
   showCanvas(
     side === "right" ? "rightOverlay" : "leftOverlay",
@@ -1309,6 +1429,144 @@ function bilinearSample(image, x, y) {
   return out;
 }
 
+
+function activeColumns(side) {
+  const detection = side === "right"
+    ? state.rightDetection
+    : state.leftDetection;
+
+  if (!detection?.cols) return [];
+
+  const excluded = state.excludedColumns[side];
+  return detection.cols.filter((c) => !excluded.has(c._columnId));
+}
+
+function refreshRestoreButton() {
+  $("restoreColumnsBtn").disabled =
+    state.excludedColumns.right.size === 0 &&
+    state.excludedColumns.left.size === 0;
+}
+
+function redrawOverlaySide(side) {
+  const detection = side === "right"
+    ? state.rightDetection
+    : state.leftDetection;
+  const image = side === "right"
+    ? state.rightFlat
+    : state.leftFlat;
+
+  if (!detection || !image) return;
+
+  const canvas = $(side === "right" ? "rightOverlay" : "leftOverlay");
+  const cols = activeColumns(side);
+  drawOverlay(image, detection.boxes, cols, canvas, side);
+
+  $(side === "right" ? "rightStats" : "leftStats").textContent =
+    `紅框 ${detection.boxes.length} · 使用 ${cols.length}/${detection.cols.length} 欄`;
+}
+
+function clearRecognitionForSide(side) {
+  if (side === "right") {
+    state.rightRecognition = state.rightRecognition.filter(
+      (item) => !state.excludedColumns.right.has(item.columnId),
+    );
+    renderRecognition(state.rightRecognition, "right");
+    $("rightRecStats").textContent =
+      `${state.rightRecognition.filter((x) => x.text.trim()).length}/${state.rightRecognition.length} 欄有文字`;
+  } else {
+    state.leftRecognition = state.leftRecognition.filter(
+      (item) => !state.excludedColumns.left.has(item.columnId),
+    );
+    renderRecognition(state.leftRecognition, "left");
+    $("leftRecStats").textContent =
+      `${state.leftRecognition.filter((x) => x.text.trim()).length}/${state.leftRecognition.length} 欄有文字`;
+  }
+
+  assembleFullText();
+}
+
+function removeColumn(side, columnId) {
+  if (!columnId) return;
+
+  state.excludedColumns[side].add(columnId);
+  refreshRestoreButton();
+  redrawOverlaySide(side);
+
+  const detection = side === "right"
+    ? state.rightDetection
+    : state.leftDetection;
+  const image = side === "right"
+    ? state.rightFlat
+    : state.leftFlat;
+
+  if (detection && image) {
+    const strips = extractPageStrips(image, detection, side);
+    if (side === "right") state.rightStrips = strips;
+    else state.leftStrips = strips;
+  }
+
+  clearRecognitionForSide(side);
+
+  setStatus(
+    "已刪除誤抓欄位。",
+    "圖上、Column 列表與全文已同步排除；可按「恢復全部刪除」重來。",
+    100,
+  );
+}
+
+function restoreAllColumns() {
+  state.excludedColumns.right = new Set();
+  state.excludedColumns.left = new Set();
+  refreshRestoreButton();
+
+  redrawOverlaySide("right");
+  redrawOverlaySide("left");
+
+  if (state.rightDetection && state.rightFlat) {
+    state.rightStrips = extractPageStrips(
+      state.rightFlat,
+      state.rightDetection,
+      "right",
+    );
+  }
+
+  if (state.leftDetection && state.leftFlat) {
+    state.leftStrips = extractPageStrips(
+      state.leftFlat,
+      state.leftDetection,
+      "left",
+    );
+  }
+
+  // Previously deleted recognition results are not cached separately.
+  // Keep existing results and ask the user to re-run recognition for restored columns.
+  setStatus(
+    "已恢復全部欄位。",
+    "藍線與 Column 已恢復；若要補回文字，重新按「5. PP-OCRv5 辨識」。",
+    0,
+  );
+}
+
+function handleOverlayDeleteClick(event, side) {
+  const canvas = event.currentTarget;
+  const rect = canvas.getBoundingClientRect();
+
+  const x = (event.clientX - rect.left) * canvas.width / rect.width;
+  const y = (event.clientY - rect.top) * canvas.height / rect.height;
+
+  const hit = state.overlayHitboxes[side].find(
+    (h) =>
+      x >= h.x &&
+      x <= h.x + h.width &&
+      y >= h.y &&
+      y <= h.y + h.height,
+  );
+
+  if (hit) {
+    removeColumn(side, hit.columnId);
+  }
+}
+
 function extractV3Strip(image, cols, index) {
   const H = image.height;
   const W = image.width;
@@ -1317,7 +1575,10 @@ function extractV3Strip(image, cols, index) {
   let y0 = Math.round(c.y0);
   let y1 = Math.round(c.y1);
 
-  const verticalMargin = Math.round(Math.max(8, c.width * 0.45));
+  const extendChars = Number($("columnExtendRange").value);
+  const verticalMargin = Math.round(
+    Math.max(8, c.width * Math.max(0, extendChars)),
+  );
   y0 = Math.max(0, y0 - verticalMargin);
   y1 = Math.min(H - 1, y1 + verticalMargin);
 
@@ -1433,10 +1694,16 @@ function renderStrips(strips, side) {
     meta.className = "strip-meta";
     meta.textContent = `${strip.width} × ${strip.height}`;
 
+    const del = document.createElement("button");
+    del.className = "strip-delete";
+    del.textContent = "× 刪除此欄";
+    del.addEventListener("click", () => removeColumn(side, strip.columnId));
+
     wrap.appendChild(canvas);
     card.appendChild(title);
     card.appendChild(wrap);
     card.appendChild(meta);
+    card.appendChild(del);
     root.appendChild(card);
   });
 }
@@ -1444,17 +1711,21 @@ function renderStrips(strips, side) {
 function extractPageStrips(image, detection, side) {
   if (!detection?.cols?.length) return [];
 
+  const cols = activeColumns(side);
   const strips = [];
 
-  detection.cols.forEach((_, index) => {
-    const strip = extractV3Strip(image, detection.cols, index);
-    if (strip) strips.push(strip);
+  cols.forEach((column, index) => {
+    const strip = extractV3Strip(image, cols, index);
+    if (strip) {
+      strip.columnId = column._columnId;
+      strips.push(strip);
+    }
   });
 
   renderStrips(strips, side);
 
   $(side === "right" ? "rightStripStats" : "leftStripStats").textContent =
-    `${strips.length} 欄`;
+    `${strips.length}/${detection.cols.length} 欄`;
 
   return strips;
 }
@@ -1940,7 +2211,10 @@ async function recognizePage(strips, side, recognizer, startProgress, span) {
     );
 
     const result = await recognizeStrip(strips[i], recognizer);
-    results.push(result);
+    results.push({
+      ...result,
+      columnId: strips[i].columnId,
+    });
   }
 
   renderRecognition(results, side);
@@ -2150,12 +2424,42 @@ dropZone.addEventListener("drop", (event) => {
 
 $("splitRange").addEventListener("input", () => {
   $("splitValue").textContent = `${Number($("splitRange").value).toFixed(1)}%`;
-  if (state.bitmap) splitPages();
+  if (state.bitmap && $("ocrMode").value === "traditional") splitPages();
 });
+
 $("gutterRange").addEventListener("input", () => {
   $("gutterValue").textContent = `${Number($("gutterRange").value).toFixed(1)}%`;
-  if (state.bitmap) splitPages();
+  if (state.bitmap && $("ocrMode").value === "traditional") splitPages();
 });
+
+$("pagePadRange").addEventListener("input", () => {
+  $("pagePadValue").textContent =
+    `${Number($("pagePadRange").value).toFixed(1)}%`;
+  if (state.bitmap && $("ocrMode").value === "traditional") splitPages();
+});
+
+$("columnExtendRange").addEventListener("input", () => {
+  $("columnExtendValue").textContent =
+    `${Number($("columnExtendRange").value).toFixed(1)} 字`;
+
+  if (state.rightDetection || state.leftDetection) {
+    setStatus(
+      "直欄上下延伸已變更。",
+      "重新按「4. V3 抽出直欄」即可，不必重跑 UVDoc / Detector。",
+      0,
+    );
+  }
+});
+
+$("rightOverlay").addEventListener(
+  "click",
+  (event) => handleOverlayDeleteClick(event, "right"),
+);
+$("leftOverlay").addEventListener(
+  "click",
+  (event) => handleOverlayDeleteClick(event, "left"),
+);
+$("restoreColumnsBtn").addEventListener("click", restoreAllColumns);
 
 $("splitBtn").addEventListener("click", () => splitPages());
 $("uvBtn").addEventListener("click", () => withBusy(runUvDoc));
@@ -2273,6 +2577,9 @@ $("clearCacheBtn").addEventListener("click", async () => {
 
 $("splitValue").textContent = `${Number($("splitRange").value).toFixed(1)}%`;
 $("gutterValue").textContent = `${Number($("gutterRange").value).toFixed(1)}%`;
+$("pagePadValue").textContent = `${Number($("pagePadRange").value).toFixed(1)}%`;
+$("columnExtendValue").textContent =
+  `${Number($("columnExtendRange").value).toFixed(1)} 字`;
 
 
 probeWebGpu().then((available) => {

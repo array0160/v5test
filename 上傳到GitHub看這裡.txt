@@ -1,10 +1,13 @@
-BookOCR v5.1 Experimental
+BookOCR v5.3 Experimental
 
-修正：靠書脊文字被切掉。
+新增人工刪除誤抓欄位：
 
-原本「忽略中央書脊」會真的刪掉中央影像。
-現在改成「書脊重疊保留 3%」：
-左右頁都保留中央一小段。
+1. 圖上藍線編號旁有紅色 ×
+2. Column 卡片下面有「× 刪除此欄」
+3. OCR 結果下面也可刪
+4. 有「恢復全部刪除」
+
+適合刪掉像 9 / 20 / 22 這種雜訊欄。
 
 更新：
 Code -> Add file -> Upload files
@@ -12,6 +15,3 @@ Code -> Add file -> Upload files
 -> Commit
 -> Actions 綠色
 -> Ctrl+F5
-
-新版標題：
-BookOCR · 自動版面 OCR v5.1 Experimental
