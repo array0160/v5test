@@ -30,7 +30,7 @@ const REC_MODELS = {
 const DICT_URL =
   "https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@main/ppocr/utils/dict/ppocrv5_dict.txt";
 
-const MODEL_CACHE = "bookocr-models-v5-3";
+const MODEL_CACHE = "bookocr-models-v5-4";
 const MAX_PAGE_SIDE = 2400;
 
 ort.env.wasm.numThreads = 1;
@@ -79,6 +79,13 @@ const state = {
     right: [],
     left: [],
   },
+  selectedColumn: null,
+  columnOverrides: {
+    right: new Map(),
+    left: new Map(),
+  },
+  editorTimer: null,
+  editorRunToken: 0,
 };
 
 let webGpuProbePromise = null;
@@ -1042,7 +1049,11 @@ function splitPages() {
   state.excludedColumns.left = new Set();
   state.overlayHitboxes.right = [];
   state.overlayHitboxes.left = [];
+  state.selectedColumn = null;
+  state.columnOverrides.right = new Map();
+  state.columnOverrides.left = new Map();
   $("restoreColumnsBtn").disabled = true;
+  closeColumnEditor();
   state.rightRecognition = [];
   state.leftRecognition = [];
 
@@ -1237,9 +1248,9 @@ function drawOverlay(image, boxes, cols, canvas, side = null) {
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  // Detector polygons: red.
-  ctx.strokeStyle = "rgba(220, 55, 65, .72)";
-  ctx.lineWidth = Math.max(1.4, canvas.width / 700);
+  // Detector polygons.
+  ctx.strokeStyle = "rgba(220, 55, 65, .62)";
+  ctx.lineWidth = Math.max(1.2, canvas.width / 760);
 
   for (const box of boxes) {
     const pts = boxPoints(box);
@@ -1251,14 +1262,7 @@ function drawOverlay(image, boxes, cols, canvas, side = null) {
     ctx.stroke();
   }
 
-  // PCA centerlines: blue.
-  ctx.strokeStyle = "rgba(25, 105, 215, .95)";
-  ctx.fillStyle = "rgba(25, 105, 215, .95)";
-  ctx.lineWidth = Math.max(2.2, canvas.width / 430);
-
   const fontSize = Math.max(15, canvas.width / 42);
-  ctx.font = `bold ${fontSize}px system-ui`;
-
   const hitboxes = [];
 
   cols.forEach((c, i) => {
@@ -1267,16 +1271,42 @@ function drawOverlay(image, boxes, cols, canvas, side = null) {
     const x0 = lineX(c, y0);
     const x1 = lineX(c, y1);
 
+    const isSelected =
+      side &&
+      state.selectedColumn?.side === side &&
+      state.selectedColumn?.columnId === c._columnId;
+
+    // Selected corridor = yellow translucent polygon.
+    if (isSelected) {
+      const poly = columnCorridorPolygon(image, cols, i, side);
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k].x, poly[k].y);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, 196, 0, .20)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(210, 145, 0, .96)";
+      ctx.lineWidth = Math.max(2.5, canvas.width / 380);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = isSelected
+      ? "rgba(220, 145, 0, 1)"
+      : "rgba(25, 105, 215, .95)";
+    ctx.lineWidth = isSelected
+      ? Math.max(3, canvas.width / 350)
+      : Math.max(2.2, canvas.width / 430);
+
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
     ctx.stroke();
 
-    const labelX = Math.max(4, Math.min(canvas.width - 65, x0 + 4));
+    const labelX = Math.max(4, Math.min(canvas.width - 70, x0 + 4));
     const labelY = Math.max(22, y0 + 20);
-
-    // Delete badge.
     const badgeSize = Math.max(17, fontSize * 0.95);
+
+    // X delete badge.
     const bx = Math.max(2, labelX - badgeSize - 3);
     const by = Math.max(2, labelY - badgeSize + 2);
 
@@ -1286,16 +1316,26 @@ function drawOverlay(image, boxes, cols, canvas, side = null) {
     ctx.font = `bold ${Math.max(13, badgeSize * 0.78)}px system-ui`;
     ctx.fillText("×", bx + badgeSize * 0.17, by + badgeSize * 0.82);
 
-    ctx.fillStyle = "rgba(25, 105, 215, .95)";
+    ctx.fillStyle = isSelected
+      ? "rgba(175, 110, 0, 1)"
+      : "rgba(25, 105, 215, .95)";
     ctx.font = `bold ${fontSize}px system-ui`;
     ctx.fillText(String(i + 1), labelX, labelY);
 
+    // Entire vertical corridor around the centerline is clickable for selection.
+    const halfHit = Math.max(14, c.width * 0.9);
     hitboxes.push({
-      x: bx - 4,
-      y: by - 4,
-      width: badgeSize + 8,
-      height: badgeSize + 8,
+      x: Math.min(x0, x1) - halfHit,
+      y: Math.min(y0, y1) - 8,
+      width: Math.abs(x1 - x0) + halfHit * 2,
+      height: Math.abs(y1 - y0) + 16,
       columnId: c._columnId,
+      deleteBox: {
+        x: bx - 4,
+        y: by - 4,
+        width: badgeSize + 8,
+        height: badgeSize + 8,
+      },
     });
   });
 
@@ -1430,6 +1470,292 @@ function bilinearSample(image, x, y) {
 }
 
 
+
+function defaultColumnOverride() {
+  return {
+    widthScale: 1,
+    shiftChars: 0,
+    topChars: 0,
+    bottomChars: 0,
+  };
+}
+
+function getColumnOverride(side, columnId) {
+  if (!state.columnOverrides[side].has(columnId)) {
+    state.columnOverrides[side].set(columnId, defaultColumnOverride());
+  }
+  return state.columnOverrides[side].get(columnId);
+}
+
+function getColumnById(side, columnId) {
+  const detection = side === "right"
+    ? state.rightDetection
+    : state.leftDetection;
+  return detection?.cols?.find((c) => c._columnId === columnId) ?? null;
+}
+
+function sideLabel(side) {
+  return side === "right" ? "右頁" : "左頁";
+}
+
+function closeColumnEditor() {
+  const card = $("columnEditorCard");
+  if (card) card.classList.add("hidden");
+
+  ["editorWidth", "editorShift", "editorTop", "editorBottom"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = true;
+  });
+
+  if ($("editorResetBtn")) $("editorResetBtn").disabled = true;
+  if ($("editorDeleteBtn")) $("editorDeleteBtn").disabled = true;
+  if ($("editorPreview")) $("editorPreview").style.display = "none";
+  if ($("editorPreviewEmpty")) {
+    $("editorPreviewEmpty").style.display = "block";
+    $("editorPreviewEmpty").textContent = "尚未選取";
+  }
+  if ($("editorOcrText")) $("editorOcrText").textContent = "尚未辨識";
+  if ($("editorOcrMeta")) $("editorOcrMeta").textContent = "";
+}
+
+function syncEditorControls() {
+  if (!state.selectedColumn) return;
+
+  const { side, columnId } = state.selectedColumn;
+  const col = getColumnById(side, columnId);
+  if (!col) return;
+
+  const ov = getColumnOverride(side, columnId);
+  const active = activeColumns(side);
+  const position = active.findIndex((c) => c._columnId === columnId);
+
+  $("columnEditorCard").classList.remove("hidden");
+  $("editorTitle").textContent =
+    `${sideLabel(side)} · Column ${String(position + 1).padStart(2, "0")}`;
+
+  $("editorWidth").disabled = false;
+  $("editorShift").disabled = false;
+  $("editorTop").disabled = false;
+  $("editorBottom").disabled = false;
+  $("editorResetBtn").disabled = false;
+  $("editorDeleteBtn").disabled = false;
+
+  $("editorWidth").value = ov.widthScale;
+  $("editorShift").value = ov.shiftChars;
+  $("editorTop").value = ov.topChars;
+  $("editorBottom").value = ov.bottomChars;
+
+  $("editorWidthValue").textContent = `${ov.widthScale.toFixed(2)}×`;
+  $("editorShiftValue").textContent = `${ov.shiftChars.toFixed(2)} 字`;
+  $("editorTopValue").textContent = `${ov.topChars.toFixed(2)} 字`;
+  $("editorBottomValue").textContent = `${ov.bottomChars.toFixed(2)} 字`;
+}
+
+function selectColumn(side, columnId) {
+  if (state.excludedColumns[side].has(columnId)) return;
+
+  state.selectedColumn = { side, columnId };
+  syncEditorControls();
+  redrawOverlaySide(side);
+  renderSelectedColumnPreview({ rerunOcr: false });
+
+  requestAnimationFrame(() => {
+    $("columnEditorCard").scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  });
+}
+
+function updateSelectedOverrideFromControls() {
+  if (!state.selectedColumn) return;
+
+  const { side, columnId } = state.selectedColumn;
+  const ov = getColumnOverride(side, columnId);
+
+  ov.widthScale = Number($("editorWidth").value);
+  ov.shiftChars = Number($("editorShift").value);
+  ov.topChars = Number($("editorTop").value);
+  ov.bottomChars = Number($("editorBottom").value);
+
+  $("editorWidthValue").textContent = `${ov.widthScale.toFixed(2)}×`;
+  $("editorShiftValue").textContent = `${ov.shiftChars.toFixed(2)} 字`;
+  $("editorTopValue").textContent = `${ov.topChars.toFixed(2)} 字`;
+  $("editorBottomValue").textContent = `${ov.bottomChars.toFixed(2)} 字`;
+
+  const { side: selectedSide } = state.selectedColumn;
+  redrawOverlaySide(selectedSide);
+
+  clearTimeout(state.editorTimer);
+  state.editorTimer = setTimeout(() => {
+    renderSelectedColumnPreview({ rerunOcr: true });
+  }, 320);
+}
+
+function resetSelectedColumnOverride() {
+  if (!state.selectedColumn) return;
+  const { side, columnId } = state.selectedColumn;
+
+  state.columnOverrides[side].set(columnId, defaultColumnOverride());
+  syncEditorControls();
+  redrawOverlaySide(side);
+  renderSelectedColumnPreview({ rerunOcr: true });
+}
+
+function selectedColumnContext() {
+  if (!state.selectedColumn) return null;
+
+  const { side, columnId } = state.selectedColumn;
+  const cols = activeColumns(side);
+  const index = cols.findIndex((c) => c._columnId === columnId);
+  if (index < 0) return null;
+
+  const image = side === "right" ? state.rightFlat : state.leftFlat;
+  if (!image) return null;
+
+  return { side, columnId, cols, index, image };
+}
+
+async function renderSelectedColumnPreview({ rerunOcr = true } = {}) {
+  const context = selectedColumnContext();
+  if (!context) return;
+
+  const { side, columnId, cols, index, image } = context;
+  const strip = extractV3Strip(image, cols, index, side);
+  if (!strip) return;
+
+  strip.columnId = columnId;
+  pixelsToCanvas(strip, $("editorPreview"));
+  $("editorPreview").style.display = "block";
+  $("editorPreviewEmpty").style.display = "none";
+
+  if (!rerunOcr) {
+    const existing = (side === "right"
+      ? state.rightRecognition
+      : state.leftRecognition
+    ).find((item) => item.columnId === columnId);
+
+    if (existing) {
+      $("editorOcrText").textContent = existing.text || "（空白）";
+      $("editorOcrMeta").textContent =
+        `既有結果 · ${(existing.confidence * 100).toFixed(1)}%`;
+    } else {
+      $("editorOcrText").textContent =
+        state.recognizer ? "調整後會自動重跑此欄…" : "Recognition 尚未載入";
+      $("editorOcrMeta").textContent = "";
+    }
+    return;
+  }
+
+  if (!state.recognizer) {
+    $("editorOcrText").textContent =
+      "Recognition 尚未載入。先跑一次「5. PP-OCRv5 辨識」後，調框就會即時重辨識。";
+    $("editorOcrMeta").textContent = "";
+    return;
+  }
+
+  const token = ++state.editorRunToken;
+  $("editorOcrText").textContent = "此欄重新辨識中…";
+  $("editorOcrMeta").textContent = "只重跑選取欄，不會重跑整頁。";
+
+  try {
+    const result = await recognizeStrip(strip, state.recognizer);
+    if (token !== state.editorRunToken) return;
+
+    result.columnId = columnId;
+
+    if (side === "right") {
+      const idx = state.rightRecognition.findIndex((x) => x.columnId === columnId);
+      if (idx >= 0) state.rightRecognition[idx] = result;
+      else state.rightRecognition.push(result);
+      renderRecognition(state.rightRecognition, "right");
+    } else {
+      const idx = state.leftRecognition.findIndex((x) => x.columnId === columnId);
+      if (idx >= 0) state.leftRecognition[idx] = result;
+      else state.leftRecognition.push(result);
+      renderRecognition(state.leftRecognition, "left");
+    }
+
+    assembleFullText();
+
+    $("editorOcrText").textContent = result.text || "（空白）";
+    const variant = result.variant ? ` · 選 ${result.variant}` : "";
+    $("editorOcrMeta").textContent =
+      `confidence ${(result.confidence * 100).toFixed(1)}%${variant}`;
+  } catch (error) {
+    if (token !== state.editorRunToken) return;
+    console.error("Selected column recognition failed:", error);
+    $("editorOcrText").textContent = "此欄辨識失敗";
+    $("editorOcrMeta").textContent =
+      error instanceof Error ? error.message : String(error);
+  }
+}
+
+function columnCorridorPolygon(image, cols, index, side) {
+  const c = cols[index];
+  const H = image.height;
+  const gap = typicalGap(cols, H);
+  const ov = getColumnOverride(side, c._columnId);
+
+  const baseExtend = Number($("columnExtendRange").value);
+  const charH = Math.max(8, c.width);
+
+  let y0 = Math.max(
+    0,
+    Math.round(c.y0 - charH * Math.max(0, baseExtend + ov.topChars)),
+  );
+  let y1 = Math.min(
+    H - 1,
+    Math.round(c.y1 + charH * Math.max(0, baseExtend + ov.bottomChars)),
+  );
+
+  if (ov.topChars < -baseExtend) {
+    y0 = Math.min(y1 - 2, Math.round(c.y0 + charH * Math.abs(baseExtend + ov.topChars)));
+  }
+  if (ov.bottomChars < -baseExtend) {
+    y1 = Math.max(y0 + 2, Math.round(c.y1 - charH * Math.abs(baseExtend + ov.bottomChars)));
+  }
+
+  function boundariesAt(y) {
+    const shiftPx = ov.shiftChars * gap;
+    const xc = lineX(c, y) + shiftPx;
+
+    let rightBoundary;
+    if (index > 0) {
+      rightBoundary = (lineX(c, y) + lineX(cols[index - 1], y)) / 2 + shiftPx;
+    } else {
+      rightBoundary = lineX(c, y) + gap * 0.48 + shiftPx;
+    }
+
+    let leftBoundary;
+    if (index < cols.length - 1) {
+      leftBoundary = (lineX(c, y) + lineX(cols[index + 1], y)) / 2 + shiftPx;
+    } else {
+      leftBoundary = lineX(c, y) - gap * 0.48 + shiftPx;
+    }
+
+    let xl = Math.min(leftBoundary, rightBoundary);
+    let xr = Math.max(leftBoundary, rightBoundary);
+
+    const center = (xl + xr) / 2;
+    const half = ((xr - xl) / 2) * ov.widthScale;
+    xl = center - half;
+    xr = center + half;
+
+    return { xl, xr, xc };
+  }
+
+  const top = boundariesAt(y0);
+  const bottom = boundariesAt(y1);
+
+  return [
+    { x: top.xl, y: y0 },
+    { x: top.xr, y: y0 },
+    { x: bottom.xr, y: y1 },
+    { x: bottom.xl, y: y1 },
+  ];
+}
+
 function activeColumns(side) {
   const detection = side === "right"
     ? state.rightDetection
@@ -1489,6 +1815,14 @@ function removeColumn(side, columnId) {
   if (!columnId) return;
 
   state.excludedColumns[side].add(columnId);
+
+  if (
+    state.selectedColumn?.side === side &&
+    state.selectedColumn?.columnId === columnId
+  ) {
+    state.selectedColumn = null;
+    closeColumnEditor();
+  }
   refreshRestoreButton();
   redrawOverlaySide(side);
 
@@ -1517,6 +1851,8 @@ function removeColumn(side, columnId) {
 function restoreAllColumns() {
   state.excludedColumns.right = new Set();
   state.excludedColumns.left = new Set();
+  state.selectedColumn = null;
+  closeColumnEditor();
   refreshRestoreButton();
 
   redrawOverlaySide("right");
@@ -1547,14 +1883,31 @@ function restoreAllColumns() {
   );
 }
 
-function handleOverlayDeleteClick(event, side) {
+function handleOverlayColumnClick(event, side) {
   const canvas = event.currentTarget;
   const rect = canvas.getBoundingClientRect();
 
   const x = (event.clientX - rect.left) * canvas.width / rect.width;
   const y = (event.clientY - rect.top) * canvas.height / rect.height;
 
-  const hit = state.overlayHitboxes[side].find(
+  // Delete X has priority.
+  const deleteHit = state.overlayHitboxes[side].find((h) => {
+    const d = h.deleteBox;
+    return (
+      x >= d.x &&
+      x <= d.x + d.width &&
+      y >= d.y &&
+      y <= d.y + d.height
+    );
+  });
+
+  if (deleteHit) {
+    removeColumn(side, deleteHit.columnId);
+    return;
+  }
+
+  // Otherwise select nearest clickable column corridor.
+  const candidates = state.overlayHitboxes[side].filter(
     (h) =>
       x >= h.x &&
       x <= h.x + h.width &&
@@ -1562,12 +1915,14 @@ function handleOverlayDeleteClick(event, side) {
       y <= h.y + h.height,
   );
 
-  if (hit) {
-    removeColumn(side, hit.columnId);
-  }
+  if (!candidates.length) return;
+
+  const hit = candidates[0];
+  selectColumn(side, hit.columnId);
 }
 
-function extractV3Strip(image, cols, index) {
+
+function extractV3Strip(image, cols, index, side = null) {
   const H = image.height;
   const W = image.width;
   const c = cols[index];
@@ -1575,12 +1930,26 @@ function extractV3Strip(image, cols, index) {
   let y0 = Math.round(c.y0);
   let y1 = Math.round(c.y1);
 
-  const extendChars = Number($("columnExtendRange").value);
-  const verticalMargin = Math.round(
-    Math.max(8, c.width * Math.max(0, extendChars)),
-  );
-  y0 = Math.max(0, y0 - verticalMargin);
-  y1 = Math.min(H - 1, y1 + verticalMargin);
+  const baseExtendChars = Number($("columnExtendRange").value);
+  const ov = side
+    ? getColumnOverride(side, c._columnId)
+    : defaultColumnOverride();
+
+  const charH = Math.max(8, c.width);
+  const topTotal = baseExtendChars + ov.topChars;
+  const bottomTotal = baseExtendChars + ov.bottomChars;
+
+  if (topTotal >= 0) {
+    y0 = Math.max(0, Math.round(y0 - charH * topTotal));
+  } else {
+    y0 = Math.min(y1 - 2, Math.round(y0 + charH * Math.abs(topTotal)));
+  }
+
+  if (bottomTotal >= 0) {
+    y1 = Math.min(H - 1, Math.round(y1 + charH * bottomTotal));
+  } else {
+    y1 = Math.max(y0 + 2, Math.round(y1 - charH * Math.abs(bottomTotal)));
+  }
 
   if (y1 - y0 < 3) return null;
 
@@ -1592,26 +1961,36 @@ function extractV3Strip(image, cols, index) {
   const rowWidths = [];
 
   for (let y = y0; y <= y1; y++) {
-    const xc = lineX(c, y);
+    const baseXc = lineX(c, y);
+    const shiftPx = ov.shiftChars * gap;
+    const xc = baseXc + shiftPx;
 
     let rightBoundary;
     if (index > 0) {
       const rightNeighbor = cols[index - 1];
-      rightBoundary = (xc + lineX(rightNeighbor, y)) / 2;
+      rightBoundary =
+        (baseXc + lineX(rightNeighbor, y)) / 2 + shiftPx;
     } else {
-      rightBoundary = xc + gap * 0.48;
+      rightBoundary = baseXc + gap * 0.48 + shiftPx;
     }
 
     let leftBoundary;
     if (index < cols.length - 1) {
       const leftNeighbor = cols[index + 1];
-      leftBoundary = (xc + lineX(leftNeighbor, y)) / 2;
+      leftBoundary =
+        (baseXc + lineX(leftNeighbor, y)) / 2 + shiftPx;
     } else {
-      leftBoundary = xc - gap * 0.48;
+      leftBoundary = baseXc - gap * 0.48 + shiftPx;
     }
 
     let xl = Math.min(leftBoundary, rightBoundary);
     let xr = Math.max(leftBoundary, rightBoundary);
+
+    const center = (xl + xr) / 2;
+    const half = ((xr - xl) / 2) * ov.widthScale;
+    xl = center - half;
+    xr = center + half;
+
     const wr = xr - xl;
 
     rows.push({ y, xc, xl, xr, wr });
@@ -1633,7 +2012,11 @@ function extractV3Strip(image, cols, index) {
     // Same V3 safety clamp as the Colab version:
     // if neighbor geometry creates an absurd corridor on a row,
     // fall back to the page's typical column width centered on xc.
-    if (!Number.isFinite(wr) || wr < minAllowed || wr > maxAllowed) {
+    const manualWidth = side && Math.abs(ov.widthScale - 1) > 0.001;
+    if (
+      !Number.isFinite(wr) ||
+      (!manualWidth && (wr < minAllowed || wr > maxAllowed))
+    ) {
       xl = xc - medianWidth / 2;
       xr = xc + medianWidth / 2;
     }
@@ -1694,6 +2077,10 @@ function renderStrips(strips, side) {
     meta.className = "strip-meta";
     meta.textContent = `${strip.width} × ${strip.height}`;
 
+    title.style.cursor = "pointer";
+    title.title = "點一下編輯這一欄";
+    title.addEventListener("click", () => selectColumn(side, strip.columnId));
+
     const del = document.createElement("button");
     del.className = "strip-delete";
     del.textContent = "× 刪除此欄";
@@ -1715,7 +2102,7 @@ function extractPageStrips(image, detection, side) {
   const strips = [];
 
   cols.forEach((column, index) => {
-    const strip = extractV3Strip(image, cols, index);
+    const strip = extractV3Strip(image, cols, index, side);
     if (strip) {
       strip.columnId = column._columnId;
       strips.push(strip);
@@ -2157,6 +2544,11 @@ function renderRecognition(items, side) {
     const name = document.createElement("div");
     name.className = "col-name";
     name.textContent = `Column ${String(index + 1).padStart(2, "0")}`;
+    if (item.columnId) {
+      name.style.cursor = "pointer";
+      name.title = "點一下編輯這一欄";
+      name.addEventListener("click", () => selectColumn(side, item.columnId));
+    }
 
     const text = document.createElement("div");
     text.className = "rec-text";
@@ -2453,13 +2845,26 @@ $("columnExtendRange").addEventListener("input", () => {
 
 $("rightOverlay").addEventListener(
   "click",
-  (event) => handleOverlayDeleteClick(event, "right"),
+  (event) => handleOverlayColumnClick(event, "right"),
 );
 $("leftOverlay").addEventListener(
   "click",
-  (event) => handleOverlayDeleteClick(event, "left"),
+  (event) => handleOverlayColumnClick(event, "left"),
 );
 $("restoreColumnsBtn").addEventListener("click", restoreAllColumns);
+
+["editorWidth", "editorShift", "editorTop", "editorBottom"].forEach((id) => {
+  $(id).addEventListener("input", updateSelectedOverrideFromControls);
+});
+
+$("editorResetBtn").addEventListener("click", resetSelectedColumnOverride);
+$("editorDeleteBtn").addEventListener("click", () => {
+  if (!state.selectedColumn) return;
+  removeColumn(
+    state.selectedColumn.side,
+    state.selectedColumn.columnId,
+  );
+});
 
 $("splitBtn").addEventListener("click", () => splitPages());
 $("uvBtn").addEventListener("click", () => withBusy(runUvDoc));

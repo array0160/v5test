@@ -1,13 +1,20 @@
-BookOCR v5.3 Experimental
+BookOCR v5.4 Experimental
 
-新增人工刪除誤抓欄位：
+新增「欄位編輯模式」。
 
-1. 圖上藍線編號旁有紅色 ×
-2. Column 卡片下面有「× 刪除此欄」
-3. OCR 結果下面也可刪
-4. 有「恢復全部刪除」
+點上方藍色中心線或編號：
+-> 選取該欄
+-> 黃色區域顯示真正 OCR corridor
 
-適合刪掉像 9 / 20 / 22 這種雜訊欄。
+可調：
+- 欄寬倍率
+- 水平偏移
+- 上方延伸
+- 下方延伸
+
+如果 Recognition 已經跑過，
+調完會只重新辨識這一欄，
+全文也同步更新。
 
 更新：
 Code -> Add file -> Upload files

@@ -10,8 +10,8 @@
 <main id="app">
   <header class="hero">
     <div>
-      <div class="eyebrow">Browser-only · v5.3 Experimental · Manual Cleanup</div>
-      <h1>BookOCR · 自動版面 OCR v5.3 Experimental</h1>
+      <div class="eyebrow">Browser-only · v5.4 Experimental · Interactive Column Editor</div>
+      <h1>BookOCR · 自動版面 OCR v5.4 Experimental</h1>
       <p>
         預設直接丟圖片即可。Auto 會先看文字框方向，再分流到：
         傳統直書、橫排書籍/文件、直排單頁或一般圖片 OCR。v4.5 直書流程完整保留。
@@ -194,6 +194,61 @@
           <canvas id="leftOverlay"></canvas>
           <div class="empty" id="leftOverlayEmpty">等待 Detector</div>
         </div>
+      </article>
+    </div>
+  </section>
+
+  <section id="columnEditorCard" class="card column-editor hidden">
+    <div class="result-title">
+      <div>
+        <div class="eyebrow">Interactive Column Editor</div>
+        <h2 id="editorTitle">尚未選取欄位</h2>
+      </div>
+      <div class="editor-actions">
+        <button id="editorResetBtn" class="ghost" disabled>還原此欄</button>
+        <button id="editorDeleteBtn" class="ghost danger-soft" disabled>刪除此欄</button>
+      </div>
+    </div>
+
+    <p id="editorHint">
+      點上方藍色中心線或編號即可選取。黃色區域是真正送進 V3/OCR 的 corridor。
+    </p>
+
+    <div class="editor-grid">
+      <label>
+        <span>欄寬倍率 <b id="editorWidthValue">1.00×</b></span>
+        <input id="editorWidth" type="range" min="0.45" max="1.80" value="1.00" step="0.05" disabled />
+      </label>
+
+      <label>
+        <span>水平偏移 <b id="editorShiftValue">0.00 字</b></span>
+        <input id="editorShift" type="range" min="-1.50" max="1.50" value="0" step="0.05" disabled />
+      </label>
+
+      <label>
+        <span>上方延伸 <b id="editorTopValue">0.00 字</b></span>
+        <input id="editorTop" type="range" min="-1.00" max="3.00" value="0" step="0.10" disabled />
+      </label>
+
+      <label>
+        <span>下方延伸 <b id="editorBottomValue">0.00 字</b></span>
+        <input id="editorBottom" type="range" min="-1.00" max="3.00" value="0" step="0.10" disabled />
+      </label>
+    </div>
+
+    <div class="editor-preview-grid">
+      <article>
+        <h3>這一欄 · 即時預覽</h3>
+        <div class="editor-preview-wrap">
+          <canvas id="editorPreview"></canvas>
+          <div id="editorPreviewEmpty" class="empty">尚未選取</div>
+        </div>
+      </article>
+
+      <article>
+        <h3>這一欄 · OCR</h3>
+        <div id="editorOcrText" class="editor-ocr-text">尚未辨識</div>
+        <div id="editorOcrMeta" class="editor-ocr-meta"></div>
       </article>
     </div>
   </section>
