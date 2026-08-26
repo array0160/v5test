@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <title>BookOCR Browser v5 Experimental</title>
+</head>
+<body>
+<main id="app">
+  <header class="hero">
+    <div>
+      <div class="eyebrow">Browser-only · v5 Experimental · Auto Layout Router</div>
+      <h1>BookOCR · 自動版面 OCR v5 Experimental</h1>
+      <p>
+        預設直接丟圖片即可。Auto 會先看文字框方向，再分流到：
+        傳統直書、橫排書籍/文件、直排單頁或一般圖片 OCR。v4.5 直書流程完整保留。
+      </p>
+    </div>
+    <div class="privacy">照片留在瀏覽器</div>
+  </header>
+
+  <section class="card">
+    <label id="dropZone" class="drop-zone">
+      <input id="fileInput" type="file" accept="image/*" hidden />
+      <img id="photoPreview" alt="原始跨頁照片" />
+      <div id="dropHint" class="drop-hint">
+        <strong>點擊或拖曳任何有文字的圖片</strong>
+        <span>書本、文件、截圖、招牌、海報都可以先丟。Auto 會先判斷版面。</span>
+      </div>
+    </label>
+  </section>
+
+  <section class="controls">
+    <div class="control info-control mode-control">
+      <span>OCR 模式</span>
+      <select id="ocrMode">
+        <option value="auto" selected>Auto（推薦：直接亂丟）</option>
+        <option value="traditional">傳統直書／右→左</option>
+        <option value="horizontal">橫排書籍／文件</option>
+        <option value="general">一般圖片／招牌／海報</option>
+      </select>
+      <small id="modeHint">Auto 會先用 Detector 判斷，不確定時仍可手動切換。</small>
+    </div>
+    <div class="control book-only-control">
+      <label>書脊位置 <b id="splitValue">50.0%</b></label>
+      <input id="splitRange" type="range" min="38" max="62" value="50" step="0.5" />
+    </div>
+    <div class="control book-only-control">
+      <label>忽略中央書脊 <b id="gutterValue">1.5%</b></label>
+      <input id="gutterRange" type="range" min="0" max="8" value="1.5" step="0.5" />
+    </div>
+    <div class="control info-control">
+      <span>目前閱讀順序</span>
+      <b id="readingOrderLabel">Auto 判斷中</b>
+      <small id="readingOrderHint">傳統直書會強制右頁→左頁、右欄→左欄。</small>
+    </div>
+    <div class="control info-control">
+      <span>Recognition 模型</span>
+      <select id="recModel">
+        <option value="mobile" selected>推薦：PP-OCRv5 mobile + WebGPU（約 16.6 MB）</option>
+        <option value="server">重型：PP-OCRv5 server（約 84.5 MB）</option>
+      </select>
+      <label class="inline-check">
+        <input id="enhanceOcr" type="checkbox" checked />
+        精度增強 A/B（原圖＋增強圖；短欄多一版）
+      </label>
+      <small>預設開啟，會比較慢但較適合模糊老書與短標題。嫌慢可關掉。</small>
+    </div>
+  </section>
+
+  <details class="card advanced">
+    <summary>Detector 參數（已套用我們 Colab 的設定）</summary>
+    <div class="advanced-grid">
+      <label>
+        textPixelThreshold
+        <input id="pixelThreshold" type="number" min="0.05" max="0.9" step="0.01" value="0.20" />
+      </label>
+      <label>
+        boxScoreThreshold
+        <input id="boxThreshold" type="number" min="0.05" max="0.9" step="0.01" value="0.35" />
+      </label>
+      <label>
+        unclipRatio
+        <input id="unclipRatio" type="number" min="0.5" max="3" step="0.05" value="1.15" />
+      </label>
+      <label>
+        maxSideLength
+        <input id="maxSideLength" type="number" min="640" max="3000" step="32" value="2000" />
+      </label>
+    </div>
+    <p>
+      預設值就是我們之前最後用的：
+      <code>0.20 / 0.35 / 1.15 / 2000 / max</code>。
+      先不要亂改，除非紅框明顯漏很多或黏太寬。
+    </p>
+  </details>
+
+  <section class="actions">
+    <span id="verticalSteps" class="action-group">
+      <button id="splitBtn" class="secondary" disabled>1. 預覽切頁</button>
+      <button id="uvBtn" disabled>2. UVDoc 展平</button>
+      <button id="detBtn" disabled>3. 找直欄中心線</button>
+      <button id="extractBtn" disabled>4. V3 抽出直欄</button>
+      <button id="recBtn" disabled>5. PP-OCRv5 辨識</button>
+    </span>
+    <button id="allBtn" disabled>Auto OCR 到文字</button>
+    <button id="clearCacheBtn" class="ghost">清除模型快取</button>
+  </section>
+
+  <section class="progress-card card">
+    <div class="progress-top">
+      <strong id="status">等待照片。</strong>
+      <span id="runtimeBadge">偵測 GPU…</span>
+    </div>
+    <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+    <div id="detail" class="detail"></div>
+  </section>
+
+  <section id="routerCard" class="card router-card hidden">
+    <div class="router-top">
+      <div>
+        <div class="eyebrow">Auto Layout Router</div>
+        <h2 id="routerTitle">尚未分析</h2>
+      </div>
+      <span id="routerConfidence" class="stats"></span>
+    </div>
+    <p id="routerDetail"></p>
+  </section>
+
+  <div id="verticalPipeline">
+  <section class="stage">
+    <div class="stage-heading">
+      <h2>1. UVDoc 展平</h2>
+      <p>先維持上一版已驗證成功的展平結果。</p>
+    </div>
+    <div class="grid two vertical-spread-grid">
+      <article class="card result-card">
+        <h3>右頁 · UVDoc</h3>
+        <div class="canvas-wrap">
+          <canvas id="rightFlat"></canvas>
+          <div class="empty" id="rightFlatEmpty">等待 UVDoc</div>
+        </div>
+      </article>
+      <article class="card result-card">
+        <h3>左頁 · UVDoc</h3>
+        <div class="canvas-wrap">
+          <canvas id="leftFlat"></canvas>
+          <div class="empty" id="leftFlatEmpty">等待 UVDoc</div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="stage">
+    <div class="stage-heading">
+      <h2>2. Detector + PCA 中心線</h2>
+      <p>
+        紅色四邊形 = PP-OCRv5 detector；藍色線 = polygon 長軸 PCA。
+        藍線上的數字依「右 → 左」排序。
+      </p>
+    </div>
+    <div class="grid two vertical-spread-grid">
+      <article class="card result-card">
+        <div class="result-title">
+          <h3>右頁 · 中心線</h3>
+          <span id="rightStats" class="stats">尚未偵測</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="rightOverlay"></canvas>
+          <div class="empty" id="rightOverlayEmpty">等待 Detector</div>
+        </div>
+      </article>
+      <article class="card result-card">
+        <div class="result-title">
+          <h3>左頁 · 中心線</h3>
+          <span id="leftStats" class="stats">尚未偵測</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="leftOverlay"></canvas>
+          <div class="empty" id="leftOverlayEmpty">等待 Detector</div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="stage">
+    <div class="stage-heading">
+      <h2>3. V3 scanline/remap 抽欄</h2>
+      <p>
+        不用紅框當裁切邊界，而是每一列依中心線 <code>x(y)</code>
+        與左右鄰欄的中點建立 corridor，再逐列重採樣。
+        這就是我們 Colab 最後沒有爆炸、也比較不削字的 V3。
+      </p>
+    </div>
+
+    <div class="grid two vertical-spread-grid">
+      <article class="card result-card">
+        <div class="result-title">
+          <h3>右頁 · Columns</h3>
+          <span id="rightStripStats" class="stats">尚未抽欄</span>
+        </div>
+        <div id="rightStrips" class="strip-grid vertical-reading">
+          <div class="empty">等待 V3 抽欄</div>
+        </div>
+      </article>
+
+      <article class="card result-card">
+        <div class="result-title">
+          <h3>左頁 · Columns</h3>
+          <span id="leftStripStats" class="stats">尚未抽欄</span>
+        </div>
+        <div id="leftStrips" class="strip-grid vertical-reading">
+          <div class="empty">等待 V3 抽欄</div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="stage">
+    <div class="stage-heading">
+      <h2>4. PP-OCRv5 逐欄辨識</h2>
+      <p>
+        每個 V3 strip 都以完整直欄送入 recognition；runtime 會把高瘦直欄
+        依 PaddleOCR 的 crop 規則旋成水平文字線再辨識。
+      </p>
+    </div>
+
+    <div class="grid two vertical-spread-grid">
+      <article class="card result-card">
+        <div class="result-title">
+          <h3>右頁 · OCR</h3>
+          <span id="rightRecStats" class="stats">尚未辨識</span>
+        </div>
+        <div id="rightRecognition" class="recognition-list">
+          <div class="empty">等待 recognition</div>
+        </div>
+      </article>
+
+      <article class="card result-card">
+        <div class="result-title">
+          <h3>左頁 · OCR</h3>
+          <span id="leftRecStats" class="stats">尚未辨識</span>
+        </div>
+        <div id="leftRecognition" class="recognition-list">
+          <div class="empty">等待 recognition</div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  </div>
+
+  <section id="generalPipeline" class="stage hidden">
+    <div class="stage-heading">
+      <h2>一般／橫排 OCR</h2>
+      <p id="generalModeDescription">
+        Auto 判斷為非傳統跨頁直書時，使用這條比較通用的文字區塊流程。
+      </p>
+    </div>
+
+    <div id="generalPages" class="general-pages"></div>
+
+    <article class="card result-card" style="margin-top:14px">
+      <div class="result-title">
+        <h3>文字區塊辨識</h3>
+        <span id="generalStats" class="stats">尚未辨識</span>
+      </div>
+      <div id="generalRecognition" class="recognition-list">
+        <div class="empty">等待 Auto OCR</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="stage">
+    <div class="stage-heading">
+      <h2>合併全文</h2>
+      <p id="fullTextOrder">Auto 會依判斷到的版面組合文字；可在上方手動切換模式重跑。</p>
+    </div>
+    <article class="card text-output-card">
+      <div class="result-title">
+        <h3>OCR 文字</h3>
+        <div class="output-actions">
+          <button id="copyTextBtn" class="mini-action" disabled>複製</button>
+          <button id="downloadTextBtn" class="mini-action" disabled>下載 TXT</button>
+        </div>
+      </div>
+      <textarea id="fullText" placeholder="辨識完成後文字會出現在這裡"></textarea>
+    </article>
+  </section>
+
+  <section class="card note">
+    <h2>這版驗收</h2>
+    <p>
+      現在看每欄辨識文字與 confidence。若長欄出現明顯截斷，
+      下一版再針對「超長直欄分段辨識」調整；幾何前處理本身先不再改。
+    </p>
+  </section>
+</main>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

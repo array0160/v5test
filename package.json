@@ -1,0 +1,18 @@
+{
+  "name": "bookocr-web-v5-experimental-auto",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "onnxruntime-web": "1.27.0",
+    "paddleocr": "1.2.0"
+  },
+  "devDependencies": {
+    "vite": "8.2.2"
+  }
+}
